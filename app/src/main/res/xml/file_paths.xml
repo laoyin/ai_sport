@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        android:name="capture_cache"
+        android:path="captures/" />
+    <cache-path
+        android:name="shared_posters_cache"
+        android:path="shared_posters/" />
+    <external-files-path
+        android:name="capture_external_files"
+        android:path="captures/" />
+</paths>

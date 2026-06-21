@@ -1,0 +1,21 @@
+.gradle/
+.idea/
+build/
+app/build/
+app/.cxx/
+local.properties
+*.iml
+
+# Local model artifacts and exports
+*.pt
+*.onnx
+*.mnn
+*.dump.json
+mnnconvert-help.txt
+
+# Android generated outputs
+app/src/main/jniLibs/
+
+# OS files
+Thumbs.db
+Desktop.ini

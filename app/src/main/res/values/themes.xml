@@ -1,0 +1,6 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.AiSport" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor" tools:targetApi="l">#F3EEE3</item>
+        <item name="android:navigationBarColor">#F3EEE3</item>
+    </style>
+</resources>
