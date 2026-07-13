@@ -11,6 +11,8 @@ val generatedAssetRoot = File(buildDir, "generated/ai_sport_assets")
 val generatedQwenAssetDir = File(generatedAssetRoot, "qwen3-vl-mnn")
 val yoloPoseModelFile = File(rootDir, "yolo26n-pose.mnn")
 val generatedPoseAssetDir = File(generatedAssetRoot, "pose")
+val repCounterModelFile = File(rootDir, "rep_counter.mnn")
+val generatedRepAssetDir = File(generatedAssetRoot, "rep")
 
 val mnnRoot = File(workspaceRoot, "MNN/MNN")
 val mnnBuildDirOverride = providers.gradleProperty("mnnBuildDir")
@@ -60,6 +62,17 @@ val syncPoseAssets by tasks.registering(Copy::class) {
     doFirst {
         generatedPoseAssetDir.mkdirs()
         println("Syncing pose model from: ${yoloPoseModelFile.absolutePath}")
+    }
+}
+
+val syncRepCounterAssets by tasks.registering(Copy::class) {
+    group = "build setup"
+    description = "Sync rep counter MNN model into generated Android assets."
+    from(repCounterModelFile)
+    into(generatedRepAssetDir)
+    doFirst {
+        generatedRepAssetDir.mkdirs()
+        println("Syncing rep counter model from: ${repCounterModelFile.absolutePath}")
     }
 }
 
@@ -152,6 +165,7 @@ android {
 tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(syncQwenVlAssets)
     dependsOn(syncPoseAssets)
+    dependsOn(syncRepCounterAssets)
     dependsOn(syncSelectedMnnJniLibs)
 }
 

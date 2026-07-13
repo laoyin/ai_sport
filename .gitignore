@@ -9,12 +9,20 @@ local.properties
 # Local model artifacts and exports
 *.pt
 *.onnx
+*.onnx.data
 *.mnn
 *.dump.json
 mnnconvert-help.txt
 
 # Android generated outputs
 app/src/main/jniLibs/
+
+# Local training data and review assets
+ai_sport_labels/
+review/
+training/__pycache__/
+training/web/__pycache__/
+_train.json
 
 # OS files
 Thumbs.db

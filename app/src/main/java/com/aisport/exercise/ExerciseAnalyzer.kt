@@ -18,7 +18,13 @@ data class ExerciseFrameSample(
     val pushupDepth: Float,
     val torsoLinearity: Float,
     val torsoHorizontal: Float,
-    val torsoVertical: Float
+    val torsoVertical: Float,
+    val leftElbowAngle: Float,
+    val rightElbowAngle: Float,
+    val leftKneeAngle: Float,
+    val rightKneeAngle: Float,
+    val hipToShoulderYDiff: Float,
+    val hipToWristYDiff: Float
 )
 
 object ExerciseAnalyzer {
@@ -38,7 +44,13 @@ object ExerciseAnalyzer {
             pushupDepth = computePushupDepthScore(estimate),
             torsoLinearity = computeBodyLinearityScore(estimate),
             torsoHorizontal = computeTorsoHorizontalScore(estimate),
-            torsoVertical = computeTorsoVerticalScore(estimate)
+            torsoVertical = computeTorsoVerticalScore(estimate),
+            leftElbowAngle = computeAngleAt(estimate, 5, 7, 9).safeAngle(),
+            rightElbowAngle = computeAngleAt(estimate, 6, 8, 10).safeAngle(),
+            leftKneeAngle = computeAngleAt(estimate, 11, 13, 15).safeAngle(),
+            rightKneeAngle = computeAngleAt(estimate, 12, 14, 16).safeAngle(),
+            hipToShoulderYDiff = computeHipToShoulderYDiff(estimate),
+            hipToWristYDiff = computeHipToWristYDiff(estimate)
         )
     }
 
@@ -380,6 +392,21 @@ object ExerciseAnalyzer {
             b != null && b.confidence >= 0.05f -> b
             else -> null
         }
+    }
+
+    private fun computeHipToShoulderYDiff(estimate: PoseEstimate): Float {
+        val shoulder = averagePoint(estimate.keypoints.getOrNull(5), estimate.keypoints.getOrNull(6)) ?: return 0f
+        val hip = averagePoint(estimate.keypoints.getOrNull(11), estimate.keypoints.getOrNull(12)) ?: return 0f
+        val torsoLen = distance(shoulder, hip).coerceAtLeast(1f)
+        return (shoulder.y - hip.y) / torsoLen
+    }
+
+    private fun computeHipToWristYDiff(estimate: PoseEstimate): Float {
+        val wrist = averagePoint(estimate.keypoints.getOrNull(9), estimate.keypoints.getOrNull(10)) ?: return 0f
+        val hip = averagePoint(estimate.keypoints.getOrNull(11), estimate.keypoints.getOrNull(12)) ?: return 0f
+        val shoulder = averagePoint(estimate.keypoints.getOrNull(5), estimate.keypoints.getOrNull(6))
+        val torsoLen = if (shoulder != null) distance(shoulder, hip).coerceAtLeast(1f) else 1f
+        return (wrist.y - hip.y) / torsoLen
     }
 
     private fun computeAngleAt(estimate: PoseEstimate, a: Int, b: Int, c: Int): Float {

@@ -26,6 +26,7 @@ set(MNN_LLM_LIB_PATH "${MNN_BUILD_DIR}/libllm.so")
 add_library(aisport_native SHARED
     mnn_jni.cpp
     pose_jni.cpp
+    rep_counter_jni.cpp
 )
 
 set(MNN_READY TRUE)

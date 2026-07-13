@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>AI Sport Rep-Count Labeler</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>AI Sport Rep-Count Labeler</h1>
+    <div id="message" class="message"></div>
+  </header>
+
+  <main>
+    <aside id="clip-list">
+      <h2>Clips</h2>
+      <ul id="clips"></ul>
+    </aside>
+
+    <section id="workspace">
+      <div id="empty-state" class="empty-state">Select a clip on the left to start.</div>
+
+      <div id="clip-detail" hidden>
+        <div class="player-row">
+          <div class="player">
+            <img id="frame-img" alt="frame">
+            <div class="player-controls">
+              <button id="btn-prev" title="prev frame">|&#9664;</button>
+              <button id="btn-play" title="play/pause">&#9654;</button>
+              <button id="btn-next" title="next frame">&#9654;|</button>
+              <input id="seek" type="range" min="0" max="0" step="1" value="0">
+              <span id="frame-counter">0 / 0</span>
+              <select id="speed">
+                <option value="0.25">0.25x</option>
+                <option value="0.5">0.5x</option>
+                <option value="1" selected>1x</option>
+                <option value="1.5">1.5x</option>
+                <option value="2">2x</option>
+              </select>
+              <label class="checkbox">
+                <input type="checkbox" id="show-pose" checked> pose overlay
+              </label>
+            </div>
+          </div>
+
+          <div class="label-form">
+            <h3>Sport &amp; Count</h3>
+            <div class="sport-row">
+              <label><input type="radio" name="sport" value="push_up" checked> push_up</label>
+              <label><input type="radio" name="sport" value="squat"> squat</label>
+              <label><input type="radio" name="sport" value="background"> background</label>
+            </div>
+            <label class="count-row">
+              true reps:
+              <input type="number" id="true-count" min="0" step="1" value="0">
+            </label>
+            <div class="button-row">
+              <button id="btn-label">Auto Label</button>
+              <button id="btn-save">Save Count</button>
+            </div>
+            <div class="button-row">
+              <button id="btn-save-labels" class="secondary">Save Labels</button>
+              <button id="btn-rerun" class="secondary danger">Re-run Auto</button>
+            </div>
+            <div id="edited-indicator" class="edited-indicator" hidden>manually edited</div>
+          </div>
+        </div>
+
+        <div class="results">
+          <div class="timeline-panel">
+            <div class="panel-header">
+              <h3>Stage timeline</h3>
+              <div class="timeline-controls">
+                <label class="method-toggle">
+                  show:
+                  <select id="timeline-method">
+                    <option value="primary" selected>primary</option>
+                    <option value="pv">pv</option>
+                    <option value="thr">thr</option>
+                    <option value="edit">edit</option>
+                  </select>
+                </label>
+                <button id="btn-edit-mode" class="edit-toggle">Edit: off</button>
+              </div>
+            </div>
+            <div class="timeline-wrap">
+              <canvas id="timeline-canvas" width="900" height="40"></canvas>
+              <div id="stage-picker" class="stage-picker" hidden>
+                <button data-stage="up" title="up">up</button>
+                <button data-stage="down" title="down">down</button>
+                <button data-stage="transition" title="transition">trans</button>
+                <button data-stage="background" title="background">bg</button>
+                <button data-stage="cancel" class="cancel" title="cancel">cancel</button>
+              </div>
+            </div>
+            <div id="edit-hint" class="edit-hint" hidden>
+              Edit mode on: drag on the timeline to select a frame range, then pick a stage. Count updates live.
+            </div>
+          </div>
+
+          <div class="angle-panel">
+            <h3>Angle signal</h3>
+            <canvas id="angle-canvas" width="900" height="220"></canvas>
+          </div>
+
+          <div class="counts-panel">
+            <h3>Counts</h3>
+            <div class="count-grid">
+              <div><span class="count-label">Auto PV</span><span id="count-pv" class="count-val">?</span></div>
+              <div><span class="count-label">Auto THR</span><span id="count-thr" class="count-val">?</span></div>
+              <div><span class="count-label">Your labels</span><span id="count-manual" class="count-val">?</span></div>
+              <div><span class="count-label">True count</span><span id="count-true" class="count-val">?</span></div>
+              <div><span class="count-label">Status</span><span id="count-status" class="count-val muted">no label yet</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

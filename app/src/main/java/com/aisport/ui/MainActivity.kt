@@ -50,11 +50,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aisport.engine.MnnEngine
+import com.aisport.exercise.ExerciseFrameSample
 import com.aisport.poster.PosterComposer
 import com.aisport.poster.PoseDebugRenderer
 import com.aisport.poster.WorkoutTimelineRenderer
 import com.aisport.pose.NativePoseEstimator
 import com.aisport.pose.PoseEstimate
+import com.aisport.rep.NativeRepCounter
+import com.aisport.training.AnnotationExport
 import com.aisport.video.SampledPoseFrame
 import com.aisport.video.VideoFrameSampler
 import com.aisport.video.VideoMotionSummary
@@ -73,11 +76,14 @@ data class SportUiState(
     val selectedBitmap: Bitmap? = null,
     val diagnosticBitmap: Bitmap? = null,
     val sampledDiagnosticFrames: List<DiagnosticFramePreview> = emptyList(),
+    val sampledPoseFrames: List<SampledPoseFrame> = emptyList(),
+    val frameSamples: List<ExerciseFrameSample> = emptyList(),
     val timelineBitmap: Bitmap? = null,
     val poseEstimate: PoseEstimate? = null,
     val motionSummary: VideoMotionSummary? = null,
     val posterBitmap: Bitmap? = null,
     val lastSavedUri: String? = null,
+    val lastExportDir: String? = null,
     val sourceLabel: String = "未选择输入"
 )
 
@@ -92,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var mnnEngine: MnnEngine
     private lateinit var sportAnalyzer: SportAnalyzer
     private lateinit var poseEstimator: NativePoseEstimator
+    private lateinit var repCounter: NativeRepCounter
     private var pendingVideoUri: Uri? = null
 
     private var uiState by mutableStateOf(SportUiState())
@@ -137,6 +144,7 @@ class MainActivity : ComponentActivity() {
         mnnEngine = MnnEngine(this)
         sportAnalyzer = SportAnalyzer(cacheDir, mnnEngine)
         poseEstimator = NativePoseEstimator(this)
+        repCounter = NativeRepCounter(this)
         bootstrapModel()
         setContent { AiSportScreen() }
     }
@@ -144,6 +152,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         mnnEngine.release()
         poseEstimator.release()
+        repCounter.release()
         super.onDestroy()
     }
 
@@ -151,13 +160,14 @@ class MainActivity : ComponentActivity() {
         thread {
             val ready = mnnEngine.loadModelBundle("qwen3-vl-mnn")
             val poseReady = poseEstimator.loadModel()
+            val repReady = repCounter.loadModel()
             runOnUiThread {
                 uiState = uiState.copy(
                     modelReady = ready && poseReady,
-                    status = if (ready && poseReady) {
-                        "大模型和 Pose 模型都已就绪，可以开始生成运动宣传卡。"
-                    } else if (ready) {
-                        "Qwen3-VL 已就绪，Pose 模型加载失败，当前会回退到占位骨架。"
+                    status = if (ready && poseReady && repReady) {
+                        "大模型、Pose 模型和时序计数模型都已就绪，可以开始分析。"
+                    } else if (ready && poseReady) {
+                        "大模型和 Pose 已就绪，但时序计数模型加载失败，当前仍会回退到规则计数。"
                     } else {
                         "模型加载失败，请先确认 qwen3-vl-mnn 资源已打包。"
                     }
@@ -182,12 +192,15 @@ class MainActivity : ComponentActivity() {
             selectedBitmap = bitmap,
             diagnosticBitmap = diagnosticBitmap,
             sampledDiagnosticFrames = emptyList(),
+            sampledPoseFrames = emptyList(),
+            frameSamples = emptyList(),
             timelineBitmap = null,
             poseEstimate = poseEstimate,
             motionSummary = null,
             posterBitmap = null,
             analysis = null,
             lastSavedUri = null,
+            lastExportDir = null,
             sourceLabel = sourceLabel,
             status = "YOLO-Pose 已完成关键点检测。当前是单图模式，可继续调用 VL 生成总结和海报。"
         )
@@ -199,17 +212,26 @@ class MainActivity : ComponentActivity() {
             selectedBitmap = null,
             diagnosticBitmap = null,
             sampledDiagnosticFrames = emptyList(),
+            sampledPoseFrames = emptyList(),
+            frameSamples = emptyList(),
             timelineBitmap = null,
             poseEstimate = null,
             motionSummary = null,
             posterBitmap = null,
             analysis = null,
             lastSavedUri = null,
+            lastExportDir = null,
             sourceLabel = sourceLabel,
             status = "正在对视频连续抽帧，并由本地动作分析器统计类别和次数… 当前模式：${analysisModeLabel(uiState.analysisMode)}"
         )
         thread {
-            val result = VideoFrameSampler.extractBestFrame(this, uri, poseEstimator, uiState.analysisMode)
+            val result = VideoFrameSampler.extractBestFrame(
+                context = this,
+                uri = uri,
+                poseEstimator = poseEstimator,
+                repCounter = repCounter,
+                forcedSportType = uiState.analysisMode
+            )
             runOnUiThread {
                 if (result != null) {
                     val keyframeLabel = "$sourceLabel · 代表帧 ${result.bestFrameTimeMs}ms / ${result.durationMs}ms · 监测 ${result.sampledFrames} 帧"
@@ -225,6 +247,8 @@ class MainActivity : ComponentActivity() {
                         selectedBitmap = result.bestFrame,
                         diagnosticBitmap = diagnosticBitmap,
                         sampledDiagnosticFrames = sampledDiagnosticFrames,
+                        sampledPoseFrames = result.sampledPoseFrames,
+                        frameSamples = result.frameSamples,
                         timelineBitmap = timelineBitmap,
                         poseEstimate = result.poseEstimate,
                         motionSummary = result.motionSummary,
@@ -318,6 +342,45 @@ class MainActivity : ComponentActivity() {
             status = if (uri != null) "海报已保存到系统相册。" else "保存失败，请重试。"
         )
         Toast.makeText(this, uiState.status, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exportAnnotationPackage() {
+        if (uiState.sampledPoseFrames.isEmpty() || uiState.frameSamples.isEmpty()) {
+            uiState = uiState.copy(status = "当前没有可导出的标注数据，请先选择并分析一段视频。")
+            return
+        }
+        uiState = uiState.copy(
+            loading = true,
+            status = "正在导出标注数据包，包含时序 JSON 和 YOLO Pose 图片…"
+        )
+        thread {
+            try {
+                val result = AnnotationExport.exportVideoAnnotationPackage(
+                    context = this,
+                    videoLabel = uiState.sourceLabel,
+                    analysisMode = uiState.analysisMode,
+                    sampledPoseFrames = uiState.sampledPoseFrames,
+                    frameSamples = uiState.frameSamples,
+                    motionSummary = uiState.motionSummary
+                )
+                runOnUiThread {
+                    uiState = uiState.copy(
+                        loading = false,
+                        lastExportDir = result.directory.absolutePath,
+                        status = "标注数据已导出：${result.frameCount} 帧 · ${result.directory.absolutePath}"
+                    )
+                    Toast.makeText(this, "标注数据已导出", Toast.LENGTH_SHORT).show()
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    uiState = uiState.copy(
+                        loading = false,
+                        status = "导出标注数据失败：${t.message ?: "unknown error"}"
+                    )
+                    Toast.makeText(this, "导出失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private fun sharePosterToWeChat() {
@@ -559,9 +622,16 @@ class MainActivity : ComponentActivity() {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
+                onClick = { exportAnnotationPackage() },
+                enabled = uiState.sampledPoseFrames.isNotEmpty() && !uiState.loading,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("导出标注数据")
+            }
+            OutlinedButton(
                 onClick = { sharePosterImage() },
                 enabled = uiState.posterBitmap != null && !uiState.loading,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.weight(1f)
             ) {
                 Text("分享微信 / 朋友圈")
             }

@@ -55,3 +55,16 @@
 - 这个目录目前没有单独放 `gradlew` wrapper。
 - 建议直接用 Android Studio 打开 `ai_sport/`。
 - 如果你后面想让我继续，我下一步就直接接 `YOLO-Pose` 的输入层和关键帧选择逻辑。
+
+
+
+
+编译模型：
+docker run -it --rm `
+  -v "D:\open-project\ali_ai_match\MNN\MNN:/workspace/MNN" `
+  -v "D:\open-project\ali_ai_match\ai_sport:/workspace/ai_sport" `
+  -w /workspace/MNN `
+  mnn:v1.0 /bin/bash
+
+
+/workspace/MNN/build-linux-converter/MNNConvert   -f ONNX   --modelFile /workspace/ai_sport/rep_counter.onnx   --MNNModel /workspace/ai_sport/rep_counter.mnn   --bizCode AI_SPORT
