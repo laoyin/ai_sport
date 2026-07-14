@@ -110,3 +110,16 @@ python ai_sport/training/train.py --data D:/datasets/ai_sport/train.json --epoch
    - repetition MAE after state-machine counting
 5. Export to ONNX.
 6. Convert ONNX to MNN after accuracy is stable.
+
+
+
+
+编译模型：
+docker run -it --rm `
+  -v "D:\open-project\ali_ai_match\MNN\MNN:/workspace/MNN" `
+  -v "D:\open-project\ali_ai_match\ai_sport:/workspace/ai_sport" `
+  -w /workspace/MNN `
+  mnn:v1.0 /bin/bash
+
+
+/workspace/MNN/build-linux-converter/MNNConvert   -f ONNX   --modelFile /workspace/ai_sport/rep_counter.onnx   --MNNModel /workspace/ai_sport/rep_counter.mnn   --bizCode AI_SPORT

@@ -5,6 +5,7 @@ import android.util.Log
 import com.aisport.engine.MnnEngine
 import com.aisport.pose.PoseEstimate
 import com.aisport.video.VideoMotionSummary
+import com.aisport.workout.WorkoutInsights
 import org.json.JSONObject
 import java.io.File
 
@@ -18,6 +19,11 @@ data class SportAnalysis(
     val riskTip: String = "",
     val slogan: String = "",
     val confidence: Double = 0.0,
+    val durationMs: Long = 0L,
+    val avgRepSeconds: Float = 0f,
+    val calories: Float = 0f,
+    val bestShotLabel: String = "",
+    val postureAdvice: String = "",
     val rawJson: String = ""
 )
 
@@ -132,10 +138,24 @@ Rules:
         val localSport = motionSummary.inferredSportType
         val localResolved = localSport in setOf("squat", "push_up") && motionSummary.confidence >= 0.5f
         if (!localResolved) {
+            val metrics = WorkoutInsights.buildSummary(motionSummary, emptyList(), poseEstimate?.qualityHint, analysis.sportType)
             return if (analysis.poseQuality == "unknown" && poseEstimate != null) {
-                analysis.copy(poseQuality = poseEstimate.qualityHint)
+                analysis.copy(
+                    poseQuality = poseEstimate.qualityHint,
+                    durationMs = metrics.durationMs,
+                    avgRepSeconds = metrics.averageRepSeconds,
+                    calories = metrics.calories,
+                    bestShotLabel = metrics.bestShotLabel,
+                    postureAdvice = metrics.advice
+                )
             } else {
-                analysis
+                analysis.copy(
+                    durationMs = metrics.durationMs,
+                    avgRepSeconds = metrics.averageRepSeconds,
+                    calories = metrics.calories,
+                    bestShotLabel = metrics.bestShotLabel,
+                    postureAdvice = metrics.advice
+                )
             }
         }
 
@@ -158,6 +178,7 @@ Rules:
         } else {
             analysis.slogan
         }
+        val metrics = WorkoutInsights.buildSummary(motionSummary, emptyList(), poseEstimate?.qualityHint, localSport)
         return analysis.copy(
             sportType = localSport,
             repetitionCount = motionSummary.repetitionCount,
@@ -165,8 +186,14 @@ Rules:
             poseQuality = poseEstimate?.qualityHint ?: analysis.poseQuality,
             summaryTitle = title,
             highlight = highlight,
+            riskTip = if (analysis.riskTip.isBlank()) metrics.advice else analysis.riskTip,
             slogan = slogan,
-            confidence = maxOf(analysis.confidence, motionSummary.confidence.toDouble())
+            confidence = maxOf(analysis.confidence, motionSummary.confidence.toDouble()),
+            durationMs = metrics.durationMs,
+            avgRepSeconds = metrics.averageRepSeconds,
+            calories = metrics.calories,
+            bestShotLabel = metrics.bestShotLabel,
+            postureAdvice = metrics.advice
         )
     }
 }
