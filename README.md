@@ -6,9 +6,9 @@
 
 
 APP-页面
-[Image](doc/app-页面1.jpg)
+![APP页面1](doc/app-页面1.jpg)
 
-[Image](doc/APP页面2.jpg)
+![APP页面2](doc/APP页面2.jpg)
 
 当前版本是一个最快可落地的 Android MVP：
 
