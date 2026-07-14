@@ -4,6 +4,12 @@
 
 - GitHub: [https://github.com/laoyin/ai_sport](https://github.com/laoyin/ai_sport)
 
+
+APP-页面
+[Image](doc/app-页面1.jpg)
+
+[Image](doc/app页面2.jpg)
+
 当前版本是一个最快可落地的 Android MVP：
 
 - 选择一张运动图片
@@ -55,16 +61,3 @@
 - 这个目录目前没有单独放 `gradlew` wrapper。
 - 建议直接用 Android Studio 打开 `ai_sport/`。
 - 如果你后面想让我继续，我下一步就直接接 `YOLO-Pose` 的输入层和关键帧选择逻辑。
-
-
-
-
-编译模型：
-docker run -it --rm `
-  -v "D:\open-project\ali_ai_match\MNN\MNN:/workspace/MNN" `
-  -v "D:\open-project\ali_ai_match\ai_sport:/workspace/ai_sport" `
-  -w /workspace/MNN `
-  mnn:v1.0 /bin/bash
-
-
-/workspace/MNN/build-linux-converter/MNNConvert   -f ONNX   --modelFile /workspace/ai_sport/rep_counter.onnx   --MNNModel /workspace/ai_sport/rep_counter.mnn   --bizCode AI_SPORT
