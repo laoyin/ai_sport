@@ -5,11 +5,16 @@
 - GitHub: [https://github.com/laoyin/ai_sport](https://github.com/laoyin/ai_sport)
 
 
-APP-页面
-![APP页面1](doc/app-页面1.jpg)
+## APP 页面
 
-![APP页面2](doc/APP页面2.jpg)
+<p align="center">
+  <img src="doc/app-页面1.jpg" alt="APP页面1" width="42%" />
+  <img src="doc/APP页面2.jpg" alt="APP页面2" width="42%" />
+</p>
 
+<p align="center">
+  <img src="doc/app实时.jpg" alt="APP页面1" width="50%" />
+</p>
 当前版本是一个最快可落地的 Android MVP：
 
 - 选择一张运动图片
