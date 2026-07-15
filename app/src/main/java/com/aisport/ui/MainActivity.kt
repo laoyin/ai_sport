@@ -20,6 +20,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -90,7 +91,7 @@ import kotlin.concurrent.thread
 data class SportUiState(
     val modelReady: Boolean = false,
     val loading: Boolean = false,
-    val status: String = "正在准备模型…",
+    val status: String = "Waiting for model and input",
     val analysisMode: String = "auto",
     val analysis: SportAnalysis? = null,
     val selectedBitmap: Bitmap? = null,
@@ -104,7 +105,8 @@ data class SportUiState(
     val posterBitmap: Bitmap? = null,
     val lastSavedUri: String? = null,
     val lastExportDir: String? = null,
-    val sourceLabel: String = "未选择输入",
+    val sourceLabel: String = "Waiting for source",
+    val selectedFrameKey: String? = null,
     val liveMode: Boolean = false,
     val liveRunning: Boolean = false,
     val liveRepCount: Int = 0,
@@ -119,9 +121,13 @@ data class SportUiState(
 )
 
 data class DiagnosticFramePreview(
+    val key: String,
     val timeMs: Long,
     val score: Float,
-    val bitmap: Bitmap
+    val bitmap: Bitmap,
+    val sourceBitmap: Bitmap,
+    val poseEstimate: PoseEstimate,
+    val sourceLabel: String
 )
 
 class MainActivity : ComponentActivity() {
@@ -146,7 +152,7 @@ class MainActivity : ComponentActivity() {
         if (granted) {
             startLiveWorkoutMode()
         } else {
-            uiState = uiState.copy(status = "未授予相机权限，无法启动实时运动模式。")
+            uiState = uiState.copy(status = "Camera permission denied")
         }
     }
 
@@ -157,11 +163,11 @@ class MainActivity : ComponentActivity() {
     private val takePicturePreviewLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
-        if (bitmap != null) applySelectedBitmap(bitmap, "相机拍照")
+        if (bitmap != null) applySelectedBitmap(bitmap, "Camera photo")
     }
 
     private val pickVideoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) loadVideo(uri, "相册视频")
+        if (uri != null) loadVideo(uri, "Album video")
     }
 
     private val captureVideoLauncher = registerForActivityResult(
@@ -170,9 +176,9 @@ class MainActivity : ComponentActivity() {
         val uri = pendingVideoUri
         pendingVideoUri = null
         if (result.resultCode == RESULT_OK && uri != null) {
-            loadVideo(uri, "相机录制视频")
+            loadVideo(uri, "Recorded video")
         } else {
-            uiState = uiState.copy(status = "已取消录制视频。")
+            uiState = uiState.copy(status = "Video recording cancelled")
         }
     }
 
@@ -205,9 +211,9 @@ class MainActivity : ComponentActivity() {
                 uiState = uiState.copy(
                     modelReady = llmReady && poseReady,
                     status = when {
-                        llmReady && poseReady && repReady -> "AI Sport 已就绪，支持实时识别、战报和宣传卡。"
-                        llmReady && poseReady -> "基础模型已就绪，时序模型未加载，将回退到规则计数。"
-                        else -> "模型加载失败，请确认资源文件已打包。"
+                        llmReady && poseReady && repReady -> "AI Sport is ready for live tracking and report generation"
+                        llmReady && poseReady -> "Vision models are ready, rep model is missing"
+                        else -> "Model loading failed, check assets files"
                     }
                 )
             }
@@ -249,8 +255,9 @@ class MainActivity : ComponentActivity() {
             analysis = null,
             lastSavedUri = null,
             lastExportDir = null,
-            sourceLabel = "实时运动模式",
-            status = "实时运动模式已启动，请开始动作。"
+            sourceLabel = "Live camera",
+            selectedFrameKey = null,
+            status = "Live workout started"
         )
         liveCameraBound = false
         livePreviewView?.let { bindLiveCamera(it) }
@@ -265,7 +272,7 @@ class MainActivity : ComponentActivity() {
             uiState = uiState.copy(
                 liveMode = false,
                 liveRunning = false,
-                status = "实时运动已结束，但有效动作帧不足。"
+                status = "Live workout ended with no valid result"
             )
             return
         }
@@ -301,7 +308,7 @@ class MainActivity : ComponentActivity() {
                                 liveAverageRepSeconds = metrics.averageRepSeconds,
                                 liveOverlayBitmap = metrics.overlayBitmap,
                                 poseEstimate = metrics.poseEstimate,
-                                status = "实时识别中：${sportTypeLabel(metrics.inferredSportType)} ${metrics.repetitionCount} 次"
+                                status = "Live tracking: ${sportTypeLabel(metrics.inferredSportType)} ${metrics.repetitionCount} reps"
                             )
                         }
                     })
@@ -318,22 +325,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun finalizeLiveWorkout(snapshot: LiveWorkoutSnapshot) {
+        val candidatePreviews = buildSampledDiagnosticFrames(snapshot.candidateFrames, snapshot.sourceLabel)
+        val defaultPreview = candidatePreviews.firstOrNull()
+        val selectedBitmap = defaultPreview?.sourceBitmap ?: snapshot.bestFrame
+        val selectedPoseEstimate = defaultPreview?.poseEstimate ?: snapshot.bestPoseEstimate
+        val selectedLabel = defaultPreview?.sourceLabel ?: snapshot.sourceLabel
         val diagnosticBitmap = PoseDebugRenderer.render(
-            snapshot.bestFrame,
-            snapshot.bestPoseEstimate,
-            snapshot.sourceLabel
+            selectedBitmap,
+            selectedPoseEstimate,
+            selectedLabel
         )
         uiState = uiState.copy(
             liveMode = false,
             liveRunning = false,
-            selectedBitmap = snapshot.bestFrame,
+            selectedBitmap = selectedBitmap,
             diagnosticBitmap = diagnosticBitmap,
+            sampledDiagnosticFrames = candidatePreviews,
+            sampledPoseFrames = snapshot.candidateFrames,
             frameSamples = snapshot.frameSamples,
             timelineBitmap = WorkoutTimelineRenderer.render(snapshot.motionSummary),
-            poseEstimate = snapshot.bestPoseEstimate,
+            poseEstimate = selectedPoseEstimate,
             motionSummary = snapshot.motionSummary,
-            sourceLabel = snapshot.sourceLabel,
-            status = "运动已结束，正在生成 AI 运动战报…"
+            posterBitmap = null,
+            analysis = null,
+            lastSavedUri = null,
+            sourceLabel = selectedLabel,
+            selectedFrameKey = defaultPreview?.key,
+            status = "Live workout finished, generating report"
         )
         analyzeAndGeneratePoster()
     }
@@ -341,7 +359,7 @@ class MainActivity : ComponentActivity() {
     private fun loadBitmap(uri: Uri) {
         contentResolver.openInputStream(uri)?.use { stream ->
             val bitmap = BitmapFactory.decodeStream(stream)
-            if (bitmap != null) applySelectedBitmap(bitmap, "相册图片")
+            if (bitmap != null) applySelectedBitmap(bitmap, "Album image")
         }
     }
 
@@ -362,7 +380,8 @@ class MainActivity : ComponentActivity() {
             lastSavedUri = null,
             lastExportDir = null,
             sourceLabel = sourceLabel,
-            status = "YOLO Pose 已完成关键点检测，当前为单图分析模式。"
+            selectedFrameKey = null,
+            status = "Pose analysis ready"
         )
     }
 
@@ -382,7 +401,8 @@ class MainActivity : ComponentActivity() {
             lastSavedUri = null,
             lastExportDir = null,
             sourceLabel = sourceLabel,
-            status = "正在对视频抽帧并进行动作计数… 当前模式：${analysisModeLabel(uiState.analysisMode)}"
+            selectedFrameKey = null,
+            status = "Parsing video: ${analysisModeLabel(uiState.analysisMode)}"
         )
         thread {
             val result = VideoFrameSampler.extractBestFrame(
@@ -394,29 +414,35 @@ class MainActivity : ComponentActivity() {
             )
             runOnUiThread {
                 if (result != null) {
-                    val keyframeLabel = "$sourceLabel · 代表帧 ${result.bestFrameTimeMs}ms / ${result.durationMs}ms · 检测 ${result.sampledFrames} 帧"
+                    val galleryBaseLabel = "$sourceLabel ? ${sportTypeLabel(result.motionSummary.inferredSportType)} ? ${result.motionSummary.repetitionCount} reps"
+                    val candidatePreviews = buildSampledDiagnosticFrames(result.sampledPoseFrames, galleryBaseLabel)
+                    val selectedPreview = candidatePreviews.firstOrNull { it.timeMs == result.bestFrameTimeMs } ?: candidatePreviews.firstOrNull()
+                    val selectedBitmap = selectedPreview?.sourceBitmap ?: result.bestFrame
+                    val selectedPoseEstimate = selectedPreview?.poseEstimate ?: result.poseEstimate
+                    val selectedLabel = selectedPreview?.sourceLabel ?: "$sourceLabel ? best frame ${result.bestFrameTimeMs}ms / ${result.durationMs}ms"
                     val diagnosticBitmap = PoseDebugRenderer.render(
-                        result.bestFrame,
-                        result.poseEstimate,
-                        keyframeLabel
+                        selectedBitmap,
+                        selectedPoseEstimate,
+                        selectedLabel
                     )
                     uiState = uiState.copy(
                         loading = false,
-                        selectedBitmap = result.bestFrame,
+                        selectedBitmap = selectedBitmap,
                         diagnosticBitmap = diagnosticBitmap,
-                        sampledDiagnosticFrames = buildSampledDiagnosticFrames(result.sampledPoseFrames),
+                        sampledDiagnosticFrames = candidatePreviews,
                         sampledPoseFrames = result.sampledPoseFrames,
                         frameSamples = result.frameSamples,
                         timelineBitmap = WorkoutTimelineRenderer.render(result.motionSummary),
-                        poseEstimate = result.poseEstimate,
+                        poseEstimate = selectedPoseEstimate,
                         motionSummary = result.motionSummary,
-                        sourceLabel = keyframeLabel,
-                        status = "视频分析完成：${sportTypeLabel(result.motionSummary.inferredSportType)} ${result.motionSummary.repetitionCount} 次"
+                        sourceLabel = selectedLabel,
+                        selectedFrameKey = selectedPreview?.key,
+                        status = "Video analysis done: ${sportTypeLabel(result.motionSummary.inferredSportType)} ${result.motionSummary.repetitionCount} reps"
                     )
                 } else {
                     uiState = uiState.copy(
                         loading = false,
-                        status = "视频关键帧提取失败，请换一段更清晰的运动视频。"
+                        status = "Video analysis failed"
                     )
                 }
             }
@@ -433,12 +459,12 @@ class MainActivity : ComponentActivity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try {
-            uiState = uiState.copy(status = "正在打开系统相机录制视频…")
+            uiState = uiState.copy(status = "Opening system camera for recording")
             captureVideoLauncher.launch(intent)
         } catch (_: Throwable) {
             pendingVideoUri = null
-            uiState = uiState.copy(status = "打开录制视频失败，请确认设备上有可用相机应用。")
-            Toast.makeText(this, "无法打开录制视频", Toast.LENGTH_SHORT).show()
+            uiState = uiState.copy(status = "Failed to open system camera")
+            Toast.makeText(this, "Failed to open system camera", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -454,7 +480,7 @@ class MainActivity : ComponentActivity() {
         val poseEstimate = uiState.poseEstimate
         val motionSummary = uiState.motionSummary
         val sourceLabel = uiState.sourceLabel
-        uiState = uiState.copy(loading = true, status = "正在生成 AI 运动战报和宣传卡…")
+        uiState = uiState.copy(loading = true, status = "AI is generating report and poster")
         thread {
             val analysis = sportAnalyzer.analyze(analysisInput, poseEstimate, motionSummary)
             val poster = analysis?.let {
@@ -471,9 +497,9 @@ class MainActivity : ComponentActivity() {
                     analysis = analysis,
                     posterBitmap = poster,
                     status = if (analysis != null && poster != null) {
-                        "AI 运动战报已生成，可以保存或分享。"
+                        "AI report generated"
                     } else {
-                        "总结生成失败，请再试一次。"
+                        "Analysis done, poster generation failed"
                     }
                 )
             }
@@ -485,19 +511,39 @@ class MainActivity : ComponentActivity() {
         val uri = PosterComposer.savePoster(this, poster)
         uiState = uiState.copy(
             lastSavedUri = uri,
-            status = if (uri != null) "海报已保存到系统相册。" else "保存失败，请重试。"
+            status = if (uri != null) "Poster saved to gallery" else "Failed to save poster"
         )
         Toast.makeText(this, uiState.status, Toast.LENGTH_SHORT).show()
     }
 
+    private fun selectCandidateFrame(frame: DiagnosticFramePreview) {
+        val diagnosticBitmap = PoseDebugRenderer.render(
+            frame.sourceBitmap,
+            frame.poseEstimate,
+            frame.sourceLabel
+        )
+        uiState = uiState.copy(
+            selectedBitmap = frame.sourceBitmap,
+            diagnosticBitmap = diagnosticBitmap,
+            poseEstimate = frame.poseEstimate,
+            posterBitmap = null,
+            analysis = null,
+            lastSavedUri = null,
+            sourceLabel = frame.sourceLabel,
+            selectedFrameKey = frame.key,
+            status = "Switched to frame ${frame.timeMs}ms, regenerating report"
+        )
+        analyzeAndGeneratePoster()
+    }
+
     private fun exportAnnotationPackage() {
         if (uiState.sampledPoseFrames.isEmpty() || uiState.frameSamples.isEmpty()) {
-            uiState = uiState.copy(status = "当前没有可导出的标注数据，请先分析一段视频。")
+            uiState = uiState.copy(status = "No annotation data to export")
             return
         }
         uiState = uiState.copy(
             loading = true,
-            status = "正在导出标注数据包，包含时序 JSON 和 Pose 图片…"
+            status = "Exporting annotation package with JSON and pose data"
         )
         thread {
             try {
@@ -513,17 +559,17 @@ class MainActivity : ComponentActivity() {
                     uiState = uiState.copy(
                         loading = false,
                         lastExportDir = result.directory.absolutePath,
-                        status = "标注数据已导出：${result.frameCount} 帧 · ${result.directory.absolutePath}"
+                        status = "Annotation exported: ${result.frameCount} frames ? ${result.directory.absolutePath}"
                     )
-                    Toast.makeText(this, "标注数据已导出", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Annotation export success", Toast.LENGTH_SHORT).show()
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
                     uiState = uiState.copy(
                         loading = false,
-                        status = "导出标注数据失败：${t.message ?: "unknown error"}"
+                        status = "Annotation export failed: ${t.message ?: "unknown error"}"
                     )
-                    Toast.makeText(this, "导出失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Annotation export failed", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -533,8 +579,8 @@ class MainActivity : ComponentActivity() {
         val poster = uiState.posterBitmap ?: return
         val uri = PosterComposer.createShareUri(this, poster)
         if (uri == null) {
-            uiState = uiState.copy(status = "海报导出失败，请重新生成后再试。")
-            Toast.makeText(this, "海报导出失败", Toast.LENGTH_SHORT).show()
+            uiState = uiState.copy(status = "Failed to create shareable poster file")
+            Toast.makeText(this, "Failed to create shareable poster file", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -548,7 +594,7 @@ class MainActivity : ComponentActivity() {
         grantShareUriPermission(uri, weChatIntent)
         try {
             startActivity(weChatIntent)
-            uiState = uiState.copy(status = "已拉起微信，可以继续分享到好友或朋友圈。")
+            uiState = uiState.copy(status = "WeChat share opened")
             return
         } catch (_: Throwable) {
         }
@@ -561,11 +607,11 @@ class MainActivity : ComponentActivity() {
         }
         grantShareUriPermission(uri, genericShare)
         try {
-            startActivity(Intent.createChooser(genericShare, "分享运动战报"))
-            uiState = uiState.copy(status = "已拉起系统分享面板。")
+            startActivity(Intent.createChooser(genericShare, "Share workout report"))
+            uiState = uiState.copy(status = "System share sheet opened")
         } catch (_: Throwable) {
-            uiState = uiState.copy(status = "当前设备没有可用的分享应用。")
-            Toast.makeText(this, "无法拉起分享", Toast.LENGTH_SHORT).show()
+            uiState = uiState.copy(status = "Poster share failed")
+            Toast.makeText(this, "Poster share failed", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -629,11 +675,13 @@ class MainActivity : ComponentActivity() {
                                 fallbackQuality = uiState.poseEstimate?.qualityHint
                             )
                         }
-                        PreviewCard("最佳动作截图", uiState.selectedBitmap)
-                        PreviewCard("姿态骨架诊断", uiState.diagnosticBitmap)
-                        PreviewCard("运动波动曲线", uiState.timelineBitmap)
-                        PreviewCard("生成的宣传海报", uiState.posterBitmap)
-                        SampledFrameGallery(uiState.sampledDiagnosticFrames)
+                        PreviewCard("Source frame", uiState.selectedBitmap)
+                        PreviewCard("Pose overlay", uiState.diagnosticBitmap)
+                        PreviewCard("Motion timeline", uiState.timelineBitmap)
+                        PreviewCard("Workout poster", uiState.posterBitmap)
+                        SampledFrameGallery(uiState.sampledDiagnosticFrames, uiState.selectedFrameKey) { frame ->
+                            selectCandidateFrame(frame)
+                        }
                         AnalysisCard(uiState.analysis, uiState.lastSavedUri)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -674,7 +722,7 @@ class MainActivity : ComponentActivity() {
                         fontSize = 12.sp
                     )
                     Text(
-                        if (state.liveRunning) "把每一次发力\n变成可见反馈" else "把训练过程\n变成可分享的战报",
+                        if (state.liveRunning) "Live workout in progress with realtime rep counting" else "Start camera workout or import photo and video for AI report",
                         color = Color.White,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 30.sp,
@@ -682,16 +730,16 @@ class MainActivity : ComponentActivity() {
                     )
                     Text(
                         if (state.liveRunning) {
-                            "${sportTypeLabel(state.liveSportType)} · ${state.liveRepCount} 次 · ${WorkoutInsights.formatCalories(state.liveCalories)}"
+                            "${sportTypeLabel(state.liveSportType)} ? ${state.liveRepCount} reps ? ${WorkoutInsights.formatCalories(state.liveCalories)}"
                         } else {
-                            "端侧推理 · 实时计数 · 姿态分析 · AI 战报"
+                            "Realtime tracking, candidate frame switch, AI report and annotation export"
                         },
                         color = Color(0xFFDCE6E0),
                         fontSize = 15.sp
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        HeroBadge(if (state.modelReady) "模型已就绪" else "模型加载中")
-                        HeroBadge(if (state.liveRunning) "实时模式" else "海报模式")
+                        HeroBadge(if (state.modelReady) "Model ready" else "Model missing")
+                        HeroBadge(if (state.liveRunning) "Live running" else "Idle")
                     }
                 }
             }
@@ -725,32 +773,17 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text(
-                    "当前状态",
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFF111827),
-                    fontSize = 22.sp
-                )
-                Text(
-                    state.status,
-                    color = Color(0xFF475569),
-                    lineHeight = 22.sp
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    SmallMetricCard("模型", if (state.modelReady) "已就绪" else "未就绪", Modifier.weight(1f))
-                    SmallMetricCard("模式", analysisModeLabel(state.analysisMode), Modifier.weight(1f))
-                    SmallMetricCard("海报", if (state.posterBitmap != null) "已生成" else "待生成", Modifier.weight(1f))
+                Text("Current Status", fontWeight = FontWeight.ExtraBold, color = Color(0xFF111827), fontSize = 22.sp)
+                Text(state.status, color = Color(0xFF475569), lineHeight = 22.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    SmallMetricCard("Model", if (state.modelReady) "Ready" else "Missing", Modifier.weight(1f))
+                    SmallMetricCard("Mode", analysisModeLabel(state.analysisMode), Modifier.weight(1f))
+                    SmallMetricCard("Report", if (state.posterBitmap != null) "Ready" else "Pending", Modifier.weight(1f))
                 }
-                Text(
-                    "输入来源：${state.sourceLabel}",
-                    color = Color(0xFF334155)
-                )
+                Text("Source: ${state.sourceLabel}", color = Color(0xFF334155))
                 state.poseEstimate?.let {
                     Text(
-                        "Pose · ${it.engineName} · score=${"%.2f".format(it.score)} · ${it.qualityHint}",
+                        "Pose: ${it.engineName} ? score=${"%.2f".format(it.score)} ? ${it.qualityHint}",
                         color = Color(0xFF6D4CC3)
                     )
                 }
@@ -758,7 +791,7 @@ class MainActivity : ComponentActivity() {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("正在处理模型结果…", color = Color(0xFF475569))
+                        Text("Processing frame and pose...", color = Color(0xFF475569))
                     }
                 }
             }
@@ -776,38 +809,38 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text("训练控制台", fontWeight = FontWeight.ExtraBold, color = Color(0xFF111827), fontSize = 22.sp)
+                Text("Controls", fontWeight = FontWeight.ExtraBold, color = Color(0xFF111827), fontSize = 22.sp)
                 Text(
-                    "先选动作模式，再进入实时训练或导入素材生成战报。",
+                    "Live mode is for realtime demo impact. Photo and video modes are for analysis, annotation export and poster generation. Candidate frames can be switched anytime.",
                     color = Color(0xFF64748B)
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("动作模式", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                    Text("Analysis Mode", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        ModeChip("自动", uiState.analysisMode == "auto", Modifier.weight(1f)) {
-                            uiState = uiState.copy(analysisMode = "auto", status = "已切换到自动识别模式。")
+                        ModeChip("Auto", uiState.analysisMode == "auto", Modifier.weight(1f)) {
+                            uiState = uiState.copy(analysisMode = "auto", status = "Switched to auto recognition mode")
                         }
-                        ModeChip("深蹲", uiState.analysisMode == "squat", Modifier.weight(1f)) {
-                            uiState = uiState.copy(analysisMode = "squat", status = "已切换到深蹲计数模式。")
+                        ModeChip("Squat", uiState.analysisMode == "squat", Modifier.weight(1f)) {
+                            uiState = uiState.copy(analysisMode = "squat", status = "Switched to squat mode")
                         }
-                        ModeChip("俯卧撑", uiState.analysisMode == "push_up", Modifier.weight(1f)) {
-                            uiState = uiState.copy(analysisMode = "push_up", status = "已切换到俯卧撑计数模式。")
+                        ModeChip("Push-up", uiState.analysisMode == "push_up", Modifier.weight(1f)) {
+                            uiState = uiState.copy(analysisMode = "push_up", status = "Switched to push-up mode")
                         }
                     }
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("实时训练", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                    Text("Live Workout", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         PrimaryActionButton(
-                            label = "开始实时运动",
+                            label = "Start Live",
                             enabled = uiState.modelReady && !uiState.liveRunning,
                             modifier = Modifier.weight(1f),
                             onClick = { ensureCameraPermissionAndStart() }
                         )
                         SecondaryActionButton(
-                            label = "结束运动",
+                            label = "Stop",
                             enabled = uiState.liveRunning,
                             modifier = Modifier.weight(1f),
                             onClick = { stopLiveWorkoutMode() }
@@ -816,36 +849,36 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("导入素材", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                    Text("Input", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        PrimaryActionButton("选择运动图", true, Modifier.weight(1f)) {
+                        PrimaryActionButton("Choose Image", true, Modifier.weight(1f)) {
                             pickImageLauncher.launch("image/*")
                         }
-                        PrimaryActionButton("相机拍照", true, Modifier.weight(1f)) {
+                        PrimaryActionButton("Take Photo", true, Modifier.weight(1f)) {
                             takePicturePreviewLauncher.launch(null)
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        SecondaryActionButton("选择视频", true, Modifier.weight(1f)) {
+                        SecondaryActionButton("Choose Video", true, Modifier.weight(1f)) {
                             pickVideoLauncher.launch("video/*")
                         }
-                        SecondaryActionButton("录制视频", true, Modifier.weight(1f)) {
+                        SecondaryActionButton("Record Video", true, Modifier.weight(1f)) {
                             captureVideo()
                         }
                     }
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("输出结果", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                    Text("Output", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         PrimaryActionButton(
-                            label = "生成战报海报",
+                            label = "Generate Report",
                             enabled = uiState.modelReady && uiState.selectedBitmap != null && !uiState.loading,
                             modifier = Modifier.weight(1f),
                             onClick = { analyzeAndGeneratePoster() }
                         )
                         SecondaryActionButton(
-                            label = "保存到相册",
+                            label = "Save Poster",
                             enabled = uiState.posterBitmap != null && !uiState.loading,
                             modifier = Modifier.weight(1f),
                             onClick = { savePoster() }
@@ -853,13 +886,13 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         SecondaryActionButton(
-                            label = "导出标注数据",
+                            label = "Export Labels",
                             enabled = uiState.sampledPoseFrames.isNotEmpty() && !uiState.loading,
                             modifier = Modifier.weight(1f),
                             onClick = { exportAnnotationPackage() }
                         )
                         SecondaryActionButton(
-                            label = "分享微信 / 朋友圈",
+                            label = "Share Poster",
                             enabled = uiState.posterBitmap != null && !uiState.loading,
                             modifier = Modifier.weight(1f),
                             onClick = { sharePosterImage() }
@@ -933,7 +966,7 @@ class MainActivity : ComponentActivity() {
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("实时运动教练", fontWeight = FontWeight.ExtraBold, color = Color(0xFF111827), fontSize = 24.sp)
+                Text("Live Workout", fontWeight = FontWeight.ExtraBold, color = Color(0xFF111827), fontSize = 24.sp)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -968,7 +1001,7 @@ class MainActivity : ComponentActivity() {
                         colors = CardDefaults.cardColors(containerColor = Color(0xCC0F172A))
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
-                            Text("实时次数", color = Color.White.copy(alpha = 0.78f), fontSize = 14.sp)
+                            Text("Reps", color = Color.White.copy(alpha = 0.78f), fontSize = 14.sp)
                             Text(
                                 state.liveRepCount.toString(),
                                 color = Color.White,
@@ -989,10 +1022,10 @@ class MainActivity : ComponentActivity() {
                         colors = CardDefaults.cardColors(containerColor = Color(0xF7FFFFFF))
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("持续时长 ${WorkoutInsights.formatDuration(state.liveElapsedMs)}", color = Color(0xFF0F172A))
-                            Text("热量 ${WorkoutInsights.formatCalories(state.liveCalories)}", color = Color(0xFFB45309))
-                            Text("节奏 ${WorkoutInsights.formatPace(state.liveAverageRepSeconds)}", color = Color(0xFF0F766E))
-                            Text("置信度 ${"%.2f".format(state.liveConfidence)}", color = Color(0xFF475569))
+                            Text("Duration  ${WorkoutInsights.formatDuration(state.liveElapsedMs)}", color = Color(0xFF0F172A))
+                            Text("Calories  ${WorkoutInsights.formatCalories(state.liveCalories)}", color = Color(0xFFB45309))
+                            Text("Pace  ${WorkoutInsights.formatPace(state.liveAverageRepSeconds)}", color = Color(0xFF0F766E))
+                            Text("Confidence  ${"%.2f".format(state.liveConfidence)}", color = Color(0xFF475569))
                         }
                     }
                 }
@@ -1004,7 +1037,7 @@ class MainActivity : ComponentActivity() {
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC))
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("实时姿态骨架", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
+                            Text("Pose Skeleton", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
                             val overlay = state.liveOverlayBitmap
                             if (overlay != null) {
                                 Image(
@@ -1017,7 +1050,7 @@ class MainActivity : ComponentActivity() {
                                     contentScale = ContentScale.Crop
                                 )
                             } else {
-                                PlaceholderBox("等待骨架识别…", 180)
+                                PlaceholderBox("Skeleton preview will appear after live camera starts.", 180)
                             }
                         }
                     }
@@ -1027,10 +1060,10 @@ class MainActivity : ComponentActivity() {
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC))
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("动作波动曲线", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
+                            Text("Motion Curve", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
                             LiveWorkoutChart(values = state.liveWaveform)
                             Text(
-                                state.liveDebug.ifBlank { "模型正在持续统计动作节奏…" },
+                                state.liveDebug.ifBlank { "Curve updates in realtime to show rhythm and motion quality." },
                                 color = Color(0xFF64748B),
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -1055,16 +1088,17 @@ class MainActivity : ComponentActivity() {
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("AI 运动战报", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = Color(0xFF111827))
+                Text("AI Workout Report", fontWeight = FontWeight.ExtraBold, fontSize = 24.sp, color = Color(0xFF111827))
                 Text(
-                    analysis?.summaryTitle?.ifBlank { "本次训练表现稳定，继续保持。" } ?: "本次训练表现稳定，继续保持。",
+                    analysis?.summaryTitle?.ifBlank { "This session has been analyzed. Review reps, duration, pace, calories and posture quality below." }
+                        ?: "This session has been analyzed. Review reps, duration, pace, calories and posture quality below.",
                     color = Color(0xFF475569)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    SmallMetricCard("总次数", (motionSummary?.repetitionCount ?: 0).toString(), Modifier.weight(1f))
-                    SmallMetricCard("持续时长", WorkoutInsights.formatDuration(metrics.durationMs), Modifier.weight(1f))
-                    SmallMetricCard("平均节奏", WorkoutInsights.formatPace(metrics.averageRepSeconds), Modifier.weight(1f))
-                    SmallMetricCard("热量消耗", WorkoutInsights.formatCalories(metrics.calories), Modifier.weight(1f))
+                    SmallMetricCard("Reps", (motionSummary?.repetitionCount ?: 0).toString(), Modifier.weight(1f))
+                    SmallMetricCard("Duration", WorkoutInsights.formatDuration(metrics.durationMs), Modifier.weight(1f))
+                    SmallMetricCard("Pace", WorkoutInsights.formatPace(metrics.averageRepSeconds), Modifier.weight(1f))
+                    SmallMetricCard("Calories", WorkoutInsights.formatCalories(metrics.calories), Modifier.weight(1f))
                 }
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1072,13 +1106,13 @@ class MainActivity : ComponentActivity() {
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC))
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("姿态建议", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
+                        Text("Posture Advice", fontWeight = FontWeight.SemiBold, color = Color(0xFF111827))
                         Text(
                             analysis?.postureAdvice?.ifBlank { metrics.advice } ?: metrics.advice,
                             color = Color(0xFF475569)
                         )
                         Text(
-                            "最佳截图：${analysis?.bestShotLabel?.ifBlank { metrics.bestShotLabel } ?: metrics.bestShotLabel}",
+                            "Best shot: ${analysis?.bestShotLabel?.ifBlank { metrics.bestShotLabel } ?: metrics.bestShotLabel}",
                             color = Color(0xFF6D4CC3)
                         )
                     }
@@ -1111,7 +1145,7 @@ class MainActivity : ComponentActivity() {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(title, fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                 if (bitmap == null) {
-                    PlaceholderBox("还没有内容", 120)
+                    PlaceholderBox("No image available yet.", 120)
                 } else {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -1141,7 +1175,11 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun SampledFrameGallery(frames: List<DiagnosticFramePreview>) {
+    private fun SampledFrameGallery(
+        frames: List<DiagnosticFramePreview>,
+        selectedFrameKey: String?,
+        onSelect: (DiagnosticFramePreview) -> Unit
+    ) {
         if (frames.isEmpty()) return
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1149,7 +1187,12 @@ class MainActivity : ComponentActivity() {
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("采样帧诊断图", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                Text("Candidate Frames", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                Text(
+                    "Tap a frame to switch the main shot and regenerate the report.",
+                    color = Color(0xFF64748B),
+                    style = MaterialTheme.typography.bodySmall
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1157,24 +1200,40 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     frames.forEach { frame ->
-                        Column(
-                            modifier = Modifier.width(280.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        val selected = frame.key == selectedFrameKey
+                        Card(
+                            modifier = Modifier
+                                .width(280.dp)
+                                .clickable { onSelect(frame) },
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selected) Color(0xFFEDE9FE) else Color(0xFFF8FAFC)
+                            )
                         ) {
-                            Image(
-                                bitmap = frame.bitmap.asImageBitmap(),
-                                contentDescription = "sample_${frame.timeMs}",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp)
-                                    .background(Color(0xFFF8FAFC), RoundedCornerShape(14.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                            Text(
-                                "${frame.timeMs}ms · score=${"%.2f".format(frame.score)}",
-                                color = Color(0xFF475569),
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Image(
+                                    bitmap = frame.bitmap.asImageBitmap(),
+                                    contentDescription = "sample_${frame.timeMs}",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(220.dp)
+                                        .background(Color.White, RoundedCornerShape(12.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Text(
+                                    if (selected) {
+                                        "Selected ? ${frame.timeMs}ms ? score=${"%.2f".format(frame.score)}"
+                                    } else {
+                                        "${frame.timeMs}ms ? score=${"%.2f".format(frame.score)}"
+                                    },
+                                    color = if (selected) Color(0xFF6D4CC3) else Color(0xFF475569),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
                         }
                     }
                 }
@@ -1190,42 +1249,47 @@ class MainActivity : ComponentActivity() {
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("结构化结果", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
+                Text("Structured Result", fontWeight = FontWeight.Bold, color = Color(0xFF111827))
                 if (analysis == null) {
-                    Text("生成后会在这里展示运动总结、建议和原始 JSON。", color = Color(0xFF64748B))
+                    Text("The generated summary, advice and raw JSON will appear here.", color = Color(0xFF64748B))
                 } else {
-                    Text("标题：${analysis.summaryTitle.ifBlank { "运动战报" }}")
-                    Text("动作：${sportTypeLabel(analysis.sportType)}")
-                    Text("次数：${analysis.repetitionCount}")
-                    Text("阶段：${analysis.stage.ifBlank { "-" }}")
-                    Text("姿态：${analysis.poseQuality}")
-                    Text("热量：${WorkoutInsights.formatCalories(analysis.calories)}")
-                    Text("时长：${WorkoutInsights.formatDuration(analysis.durationMs)}")
-                    Text("建议：${analysis.postureAdvice.ifBlank { analysis.riskTip.ifBlank { "-" } }}")
+                    Text("Title: ${analysis.summaryTitle.ifBlank { "Workout Report" }}")
+                    Text("Sport: ${sportTypeLabel(analysis.sportType)}")
+                    Text("Reps: ${analysis.repetitionCount}")
+                    Text("Stage: ${analysis.stage.ifBlank { "-" }}")
+                    Text("Pose: ${analysis.poseQuality}")
+                    Text("Calories: ${WorkoutInsights.formatCalories(analysis.calories)}")
+                    Text("Duration: ${WorkoutInsights.formatDuration(analysis.durationMs)}")
+                    Text("Advice: ${analysis.postureAdvice.ifBlank { analysis.riskTip.ifBlank { "-" } }}")
                     if (savedUri != null) {
-                        Text("相册 URI：$savedUri", color = Color(0xFF0F766E))
+                        Text("Gallery URI: $savedUri", color = Color(0xFF0F766E))
                     }
-                    Text("原始 JSON：${analysis.rawJson}", color = Color(0xFF64748B))
+                    Text("Raw JSON: ${analysis.rawJson}", color = Color(0xFF64748B))
                 }
             }
         }
     }
 
     private fun analysisModeLabel(mode: String): String = when (mode) {
-        "squat" -> "深蹲"
-        "push_up" -> "俯卧撑"
-        else -> "自动"
+        "squat" -> "Squat"
+        "push_up" -> "Push-up"
+        else -> "Auto"
     }
 
     private fun sportTypeLabel(type: String): String = when (type) {
-        "squat" -> "深蹲"
-        "push_up" -> "俯卧撑"
-        "sit_up" -> "仰卧起坐"
-        else -> "未知动作"
+        "squat" -> "Squat"
+        "push_up" -> "Push-up"
+        "sit_up" -> "Sit-up"
+        else -> "Unknown"
     }
-    private fun buildSampledDiagnosticFrames(frames: List<SampledPoseFrame>): List<DiagnosticFramePreview> {
+
+    private fun buildSampledDiagnosticFrames(
+        frames: List<SampledPoseFrame>,
+        baseLabel: String
+    ): List<DiagnosticFramePreview> {
         return frames.map { frame ->
             DiagnosticFramePreview(
+                key = buildFrameKey(frame.timeMs),
                 timeMs = frame.timeMs,
                 score = frame.poseEstimate.score,
                 bitmap = PoseDebugRenderer.renderThumbnail(
@@ -1233,8 +1297,13 @@ class MainActivity : ComponentActivity() {
                     poseEstimate = frame.poseEstimate,
                     sourceLabel = "${frame.timeMs}ms",
                     withHeader = false
-                )
+                ),
+                sourceBitmap = frame.bitmap,
+                poseEstimate = frame.poseEstimate,
+                sourceLabel = "$baseLabel ? ${frame.timeMs}ms"
             )
         }
     }
+
+    private fun buildFrameKey(timeMs: Long): String = "frame_$timeMs"
 }
