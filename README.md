@@ -13,6 +13,7 @@
 
 <p align="center">
   <img src="doc/app实时.jpg" alt="APP实时页面" width="50%" />
+  <img src="doc/标注平台.png" alt="标注平台" width="50%" />
 </p>
 
 当前版本是一个可落地的 Android AI 运动 MVP，支持：
@@ -64,6 +65,7 @@
 - [x] 已实现模型训练
 - [x] 已实现 AI 自动计算 YOLO-Pose 关键帧信息
 - [x] 已实现俯卧撑次数识别
+- [x] 标注平台-模型训练
 - [x] 已完成 20 个俯卧撑视频标注
 
 ## 下一步计划
